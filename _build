@@ -1,0 +1,868 @@
+#!/bin/sh
+##
+## Copyright 2022-2024 Detlef Riekenberg
+## License: MIT
+##
+
+
+old_cd="`pwd`"
+all_opts=""${1+"$@"}
+srcdir=""
+opt_m=""
+opt_time=""
+triplet=""
+triplet_arch=""
+triplet_os=""
+host=""
+starter=""
+starter_wine="wine"
+starter_dos="dosemu -dumb -q -tde -d $XDG_RUNTIME_DIR -K ./  -E "
+starter_qemu="qemu-"
+starter_js="node"
+starter_static=""
+
+time_active="time -p"
+time_default=""
+
+c_or_cxx=""
+
+
+default_cc="cc"
+default_cxx="c++"
+
+debug_me="$DEBUG"
+
+#echo "all_opts:" "$all_opts"
+
+echo "# #################### starting as: ""`basename $0`"
+
+OLD_MAKE="$MAKE"
+OLD_CC="$CC"
+OLD_CXX="$CXX"
+OLD_CFLAGS="$CFLAGS"
+OLD_CXXFLAGS="$CXXFLAGS"
+
+unset CFLAGS
+unset CXXFLAGS
+
+
+if [ -n "$C_OR_CXX" ]
+then
+    c_or_cxx="$C_OR_CXX"
+fi
+
+if [ -z "$MAKE" ]
+then
+    MAKE="make"
+fi
+
+
+if [ -z "$LASTBUILD" ]
+then
+    LASTBUILD=`date --utc "+%s" `
+fi
+export LASTBUILD
+
+scriptname="`basename $0 | tr -d "_" `"
+
+#########################
+
+opt_time="$time_default"
+
+if [ -n "$1" ]
+then
+    if [ "$1" = "--notime" -o "$1" = "--no-timer" ]
+    then
+        opt_time=""
+        shift
+        all_opts=""${1+"$@"}
+    fi
+fi
+
+if [ -n "$1" ]
+then
+    if [ "$1" = "--time" -o "$1" = "--timer" ]
+    then
+        opt_time="$time_active"
+        shift
+        all_opts=""${1+"$@"}
+    fi
+fi
+
+
+#########################
+
+zigdirs=""
+if [ "$scriptname" = "zig" -o "$scriptname" = "zigcc" -o "$scriptname" = "zigc++" ]
+then
+    zigdirs=" _zig*.* "
+fi
+
+makedirs=""
+if [ "$scriptname" = "make" -o "$scriptname" = "make-ln" -o "$scriptname" = "link"  ]
+then
+    makedirs="_build*.*   _cmake*.*  _diet*.*  _make*.*  _zig*.*   "
+#    echo "makedirs: $makedirs"
+fi
+
+rundirs=""
+if [ "$scriptname" = "run" -o "$scriptname" = "runstatic" ]
+then
+    rundirs=" _bin*.*  _build*.*  _cmake*.*  _diet*.*  _make*.*  _zig*.*   "
+fi
+
+
+#echo "scriptname: $scriptname"
+#echo "makedirs:   $makedirs"
+#echo "rundirs:    $rundirs"
+#echo "zigdirs:    $zigdirs"
+
+all_dirs_ls="`ls 2>/dev/null -d -1  _$scriptname*.*  __$scriptname*.*  $makedirs $rundirs $zigdirs  `"
+#all_dirs1   ="`echo "$all_dirs_ls" | sort -u | grep -v "configure" |  tr \"\12\" \" \" `"
+
+all_dirs="`echo "$all_dirs_ls" | sort -u | tr \"\12\" \" \" `"
+
+# echo "#############################################################"
+# echo "all_dirs_ls: $all_dirs_ls"
+# echo "################"
+# echo "all_dirs:    $all_dirs"
+# echo "################ ------------------------ ###################"
+
+
+# try to detect a build mode from the environment: c or c++
+
+if [ -z "$c_or_cxx" -a -n "$CC" -a -n "$CXX" -a "$CC"="$CXX" ]
+then
+    c_or_cxx="BOTH"
+fi
+
+if [ -z "$c_or_cxx" ]
+then
+    if [ -n "$CC" ]
+    then
+        c_or_cxx="CC"
+    fi
+fi
+
+if [ -z "$c_or_cxx" ]
+then
+    if [ -n "$CXX" ]
+    then
+        c_or_cxx="CXX"
+    fi
+fi
+
+
+# try to find the top source directory
+
+srcdir=""
+
+if [ -e  "$old_cd/.srcdir" ]
+then
+    # we have a source directory from a prev. run of this script
+    srcdir="$old_cd/.srcdir"
+
+else
+    if [ -z  "$srcdir" ]
+    then
+        if [ -e  "$old_cd/.git" ]
+        then
+            srcdir="$old_cd"
+        fi
+    fi
+
+    if [ -z  "$srcdir" ]
+    then
+        if [ -x  "$old_cd/configure.ac" ]
+        then
+            srcdir="$old_cd"
+        fi
+    fi
+
+    if [ -z  "$srcdir" ]
+    then
+        if [ -x  "$old_cd/configure" ]
+        then
+            srcdir="$old_cd"
+        fi
+    fi
+
+    if [ -z  "$srcdir" ]
+    then
+        if [ -e  "$old_cd/CMakeLists.txt" ]
+        then
+            srcdir="$old_cd"
+        fi
+    fi
+
+    # When nothing was found, assume, that we are in the source three
+    if [ -z  "$srcdir" ]
+    then
+        srcdir="$old_cd"
+    fi
+fi
+
+if [ -n "$debug_me" ]
+then
+    echo "# source directory: $srcdir/"
+fi
+
+
+################
+
+if [ "$scriptname" = "link" ]
+then
+all_source="`ls 2>/dev/null  -1   $all_opts Makefile | tr \"\12\" \" \"  `"
+else
+all_source="`ls 2>/dev/null  -1   $srcdir/*.c  $srcdir/*.h $srcdir/*.cc $srcdir/*.cpp  $srcdir/*.hpp $srcdir/*.cxx  $srcdir/*.hxx $srcdir/*.zig  $srcdir/Makefile | tr \"\12\" \" \"  `"
+fi
+
+
+#echo "all_source: $all_source"
+#echo " "
+
+#################
+
+if [ -n "$debug_me" ]
+then
+    if [ "$scriptname" != "link" ]
+    then
+        if [ -n "$c_or_cxx" ]
+        then
+            echo "# c_or_cxx:   $c_or_cxx"
+        fi
+        echo "# CC:         $CC"
+        echo "# CFLAGS:     $OLD_CFLAGS"
+        echo "# CXX:        $CXX"
+        echo "# CXXFLAGS:   $OLD_CXXFLAGS"
+        echo "#"
+    fi
+fi
+
+################################
+# loop through all found subdirs
+
+for this_entry in  $all_dirs
+do
+
+    echo "# ############### $scriptname in: $this_entry"
+
+    toolchain=""
+    triplet=""
+    triplet_arch=""
+    triplet_os=""
+
+    host=""
+
+# extract build details from the directory name
+    first_part="`echo "$this_entry" | cut -d "." -f1 `"
+    build_mode="`echo "$first_part" | cut -d "_" -f2-  | tr -d [0123456789+] `"
+    opt_m="`echo "$first_part"      | cut -d "_" -f2-  | tr -d [:alpha:] `"
+    toolchain="`echo "$this_entry"  | cut -d "." -f2 `"
+    opts_part="`echo "$this_entry"  | cut -d "." -f3- | tr "." " " `"
+
+    if [ -n "x$debug_me" ]
+    then
+        echo "## first_part: $first_part"
+        echo "## toolchain:  $toolchain"
+    fi
+
+    if [ "x$toolchain" = "x$first_part" ]
+    then
+        case "x$c_or_cxx" in
+        "xc" | "xC" | "xCC")
+            toolchain="$CC"
+            ;;
+        "xc++" | "xcxx" | "xC++" | "xCXX")
+            toolchain="$CXX"
+            ;;
+        esac
+    fi
+
+    if [ -z "$toolchain" ]
+    then
+        case "x$c_or_cxx" in
+        "xc" | "xC" | "xCC")
+            toolchain="$CC"
+            ;;
+        "xc++" | "xcxx" | "xC++" | "xCXX")
+            toolchain="$CXX"
+            ;;
+        esac
+    fi
+
+## do we have a build triplet?
+    triplet="`echo "$toolchain" | cut -d "-" -f2- `"
+
+    if [ -n "$triplet" ]
+    then
+
+        triplet="`echo "$toolchain" | cut -d "-" -f1-4 `"
+        if [ "$triplet" = "$toolchain" ]
+        then
+            triplet="`echo "$toolchain" | cut -d "-" -f1-3 `"
+
+            if [ "$triplet" = "$toolchain" ]
+            then
+                triplet="`echo "$toolchain" | cut -d "-" -f1-2 `"
+
+                if [ "$triplet" = "$toolchain" ]
+                then
+                    triplet="`echo "$toolchain" | cut -d "-" -f1`"
+
+                    if [ "$triplet" = "$toolchain" ]
+                    then
+                        triplet=""
+                    fi
+                fi
+            fi
+        fi
+    fi
+
+
+    if [ -n "$triplet" ]
+    then
+        triplet_arch="`echo "$triplet" | cut -d "-" -f1`"
+        triplet_os="`echo "$triplet" | cut -d "-" -f2`"
+
+        if [ "$triplet_os" = "$triplet_arch" ]
+        then
+            triplet_os="linux"
+        fi
+
+        echo "# found triplet $triplet: using arch: $triplet_arch and os: $triplet_os"
+    fi
+
+    # when the toochain includes a triplet, you can use $HOST to overwrite the host argument
+    if [ -n "$triplet" ]
+    then
+        if [ -n "$HOST" ]
+        then
+            host=$HOST
+        else
+            host="--host=$triplet"
+        fi
+    fi
+
+
+    if [ "$opts_part" = "$first_part" ]
+    then
+        opts_part=""
+    fi
+
+    if [ -n "$opt_m" ]
+    then
+        opt_m="-m$opt_m"
+    fi
+
+    if [ -n "$debug_me" ]
+    then
+        if [ "$scriptname" != "link" ]
+        then
+            echo "# first_part: $first_part"
+            echo "# build_mode: $build_mode"
+            echo "# toolchain:  $toolchain"
+            if [ -n "$c_or_cxx" ]
+            then
+                echo "# c_or_cxx:   $c_or_cxx"
+            fi
+            echo "# triplet:    $triplet  (arch: $triplet_arch / os: $triplet_os)"
+            echo "# opt_m:      $opt_m"
+            echo "# opts_part:  $opts_part"
+            echo "#"
+        fi
+    fi
+
+    if [ -z "$toolchain$c_or_cxx" ]
+    then
+        echo "#"
+        echo "# No toolchain selected. Are you sure?"
+        echo "#"
+    fi
+
+    if [ -z "$c_or_cxx" ]
+    then
+        if [ -n "$toolchain" ]
+        then
+            export CC="$toolchain"
+            export CXX="$toolchain"
+        else
+            export CC="$default_cc"
+            export CXX="$default_cxx"
+        fi
+        export CFLAGS="$opts_part $OLD_CFLAGS $opt_m"
+        export CXXFLAGS="$opts_part $OLD_CXXFLAGS $opt_m"
+    fi
+
+
+#
+    if [ -n "$toolchain$c_or_cxx" ]
+    then
+
+        cd "$this_entry"
+
+        if [ -n "$LASTBUILD" ]
+        then
+            echo "#define LASTBUILD $LASTBUILD" >lastbuild.h
+        fi
+        if [ -n "$c_or_cxx" ]
+        then
+            if [ -n "$debug_me" ]
+            then
+                echo "### detected c_or_cxx: $c_or_cxx with toolchain $toolchain"
+            fi
+
+            if [ "$c_or_cxx" = "CC" -o "$c_or_cxx" = "C" -o "$c_or_cxx" = "c" ]
+            then
+                export CC="$toolchain"
+                export CFLAGS="$opts_part $OLD_CFLAGS $opt_m"
+                unset CXX
+                unset CXXFLAGS
+            fi
+            if [ "$c_or_cxx" = "CXX" ]
+            then
+                export CXX="$toolchain"
+                export CXXFLAGS="$opts_part $OLD_CXXFLAGS $opt_m"
+                unset CC
+                unset CFLAGS
+            fi
+            if [ "$c_or_cxx" = "BOTH" ]
+            then
+                export CC="$toolchain"
+                export CFLAGS="$opts_part $OLD_CFLAGS $opt_m"
+                export CXX="$toolchain"
+                export CXXFLAGS="$opts_part $OLD_CXXFLAGS $opt_m"
+            fi
+        fi
+
+        if [ -z "$toolchain" ]
+        then
+            echo "# upps, toolchain is empty"
+        fi
+
+
+        case "$scriptname" in
+        "bin" )
+            # first arg is the file to compile
+            if [ -n "$all_opts" -a -e "$srcdir/$1" ]
+            then
+                echo  "# compiling with $toolchain" "$srcdir/"$all_opts
+                $opt_time "$toolchain" "$srcdir/"$all_opts  2>&1  | tee _bin.txt
+            else
+                echo "# bad options for $toolchain"
+            fi
+            ;;
+
+
+        "build")
+            if [ -n "$triplet" ]
+            then
+                echo "# building with autotools and $toolchain for $host"
+            else
+                echo "# building with autotools and $toolchain"
+            fi
+
+            # echo "calling configure:"
+            echo "CC=$CC CXX=$CXX $opt_time $srcdir/configure  $host $all_opts "
+
+            $opt_time $srcdir/configure  $host $all_opts   2>&1 | tee _configure.txt
+
+            # echo "calling $MAKE:"
+            $opt_time  $MAKE  2>&1  |  tee _make.txt
+            ;;
+
+
+        "cmake")
+            echo "# try building with cmake and $toolchain"
+            echo "# "CC="$toolchain"  CFLAGS=\"$CFLAGS $opt_m $opts_part \" cmake -S $srcdir  $all_opts
+
+            LFLAGS="$LFLAGS $opt_m"
+
+            if [ -n "$CC" ]
+            then
+                CMAKE_C_COMPILER="$toolchain"
+                CMAKE_C_FLAGS="$CMAKE_C_FLAGS $CFLAGS "
+
+            fi
+
+            if [ -n "$CXX" ]
+            then
+                CMAKE_CXX_COMPILER="$toolchain"
+                CMAKE_CXX_FLAGS="$CMAKE_CXX_FLAGS $CXXFLAGS "
+            fi
+
+            if [ -n "$opt_m" ]
+            then
+                if [ -n "$CC" ]
+                then
+                    CMAKE_C_COMPILER_ARG1="$opt_m"
+                fi
+                if [ -n "$CXX" ]
+                then
+                    CMAKE_CXX_COMPILER_ARG1="$opt_m"
+                fi
+                CMAKE_SHARED_LINKER_FLAGS="$CMAKE_SHARED_LINKER_FLAGS $opt_m"
+            fi
+
+            $opt_time  cmake -S "$srcdir"  $all_opts   2>&1 | tee _cmake.txt
+            $opt_time  $MAKE  2>&1 | tee _make.txt
+            ;;
+
+
+       "configure")
+            echo "# configure for $toolchain"
+            $opt_time  $srcdir/configure   $all_opts   2>&1 | tee _configure.txt
+            ;;
+
+
+        "diet")
+            if [ -n "$all_opts" ]
+            then
+                export CC="diet -v $toolchain"
+                echo "# compiling with diet -v -Os $toolchain" $CFLAGS $opt_m $opts_part   $srcdir/$all_opts
+                $opt_time  diet -v -Os "$toolchain" $CFLAGS $opt_m $opts_part   $srcdir/$all_opts  2>&1  | tee _bin.txt
+            else
+                echo "# no options for $toolchain"
+            fi
+            ;;
+
+
+        "dietbuild")
+            if [ -n "$host" ]
+            then
+                echo "# building with autotools and diet $toolchain for $host"
+            else
+                echo "# building with autotools and diet $toolchain"
+            fi
+            export CC="diet -v $toolchain"
+            CC="diet -v $toolchain"  $opt_time  $srcdir/configure  $host $all_opts   2>&1 | tee _configure.txt
+            CC="diet -v $toolchain"  $opt_time  $MAKE  >&1 | tee _make.txt
+            ;;
+
+
+        "link")
+            echo "# linking source files..."
+
+#            echo "all_opts: $all_opts"
+
+
+            for this_source  in  $all_source
+            do
+                if [ ! -e "$this_source" ]
+                then
+                    echo "linking $this_source"
+                    ln -s -v  $srcdir/$this_source  ./  2>&1 | tee -a _link.txt
+                fi
+            done
+            ;;
+
+
+        "make")
+            echo "# call $MAKE for $toolchain"
+
+            if [ ! -e Makefile ]
+            then
+
+                if [ -e "$srcdir"/Makefile ]
+                then
+                    ln -s  "$srcdir"/Makefile  Makefile
+                fi
+            fi
+
+#            echo "make" time  $MAKE  --no-silent -I "$old_cd" -f "$srcdir/Makefile" -w $all_opts
+#            echo "make" time  $MAKE  --no-silent -I "$old_cd" -w $all_opts
+
+            $opt_time  $MAKE  --no-silent  -I "$old_cd"  -I "$srcdir"  -w  $all_opts   2>&1 | tee _make.txt
+            ;;
+
+
+        "make-ln" | "makeln" )
+            echo "# call make-ln for $toolchain"
+            if [ ! -e Makefile ]
+            then
+
+                if [ -e "$srcdir"/Makefile ]
+                then
+                    for this_source in  $all_source
+                    do
+                        echo "linking $this_source"
+                        ln -s  $this_source  ./
+                    done
+                fi
+            fi
+
+            echo "# call make-ln" CC=$toolchain  CFLAGS="$CFLAGS $opt_m $opts_part"  time  $MAKE  $all_opts
+
+            $opt_time  $MAKE  $all_opts   2>&1 | tee _make.txt
+            ;;
+
+
+        "run" | "runstatic" | "runsystem" )
+
+#            echo "# running: $all_opts"
+
+            starter=""
+            starter_system=""
+            starter_static=""
+            app=""
+            app_ext=""
+
+
+            if [ -n "$all_opts" ]
+            then
+                app=`basename "$1"  ".EXE"`
+                app=`basename "$1"  ".exe"`
+                app=`basename "$1"  ".com"`
+                app=`basename "$1"  ".js"`
+
+                if [ ! -e "$1" ]
+                then
+                    if [ -e "$app"".EXE" ]
+                    then
+                        app_ext=".EXE"
+                        ln -s "$app"".EXE" "$app"
+                    fi
+                    if [ -e "$app"".exe" ]
+                    then
+                        app_ext=".exe"
+                        ln -s "$app"".exe" "$app"
+                    fi
+                    if [ -e "$app"".com" ]
+                    then
+                        app_ext=".com"
+                        ln -s "$app"".com" "$app"
+                    fi
+                    if [ -e "$app"".js" ]
+                    then
+                        app_ext=".js"
+                        ln -s "$app"".js" "$app"
+                    fi
+
+                fi
+
+                file_of_app="`file 2>/dev/null  -b $app$app_ext `"
+                file_id="`echo "$file_of_app" | cut -d " " -f1`"
+                file_js="`echo "$file_of_app" | grep -i "JavaScript"`"
+                file_linux="`echo "$file_of_app" | grep -i "Linux"`"
+                file_windows="`echo "$file_of_app" | grep -i "Windows"`"
+
+
+                if [ "$scriptname" = "runstatic" ]
+                then
+                    starter_static="-static"
+                fi
+                if [ "$scriptname" = "runsystem" ]
+                then
+                    starter_system="system-"
+                fi
+
+                if [ -n "$triplet$file_js$file_windows" ]
+                then
+                    if [ -n "$debug_me" ]
+                    then
+                        echo "# searching starter for $app$app_ext: $triplet  ($triplet_arch / $triplet_os)"
+                    fi
+                fi
+
+                if [ "$file_id" = "MS-DOS" ]
+                then
+                    if [ -z "$file_windows" ]
+                    then
+                        starter="$starter_dos"
+                    else
+                        starter="$starter_wine"
+                    fi
+                    app_ext=".exe"
+                 fi
+
+                if [ "$triplet_arch" = "ia16" ]
+                then
+                    starter="$starter_dos"
+                    app_ext=".exe"
+                fi
+
+                if [ "$file_id" = "PE32" -o "$file_id" = "PE32+" ]
+                then
+                    starter="$starter_wine"
+                    app_ext=".exe"
+                fi
+
+                if [ -n "$file_js" ]
+                then
+                    starter="$starter_js"
+                    app_ext=".js"
+                fi
+
+                if [ "$file_id" = "POSIX" ]
+                then
+                    starter="wine"
+                    app_ext=".exe"
+#                    echo "# POSIX shell script"
+                fi
+
+
+                if [ -n "$debug_me" ]
+                then
+                    echo "# prepare to run: $app$app_ext"
+                    echo "# app_ext: $app_ext"
+                    echo "# file_of_app"
+                    echo "# : $file_of_app"
+                    echo "# file_js:      $file_js"
+                    echo "# file_windows: $file_windows"
+                    echo "# file_id: $file_id"
+                    echo "# triplet_arch: $triplet_arch"
+                    echo "# triplet_os: $triplet_os"
+                    echo "# starter: $starter"
+                    echo "###############################################"
+                fi
+
+                if [ -z "$starter" ]
+                then
+
+                    case "$triplet_os" in
+                    "w64" | "win32" | "windows*" | "win64" | "win16" | "nt" )
+                        starter="$starter_wine"
+                        app_ext=".exe"
+                        ;;
+
+                    "com" | "tiny" | "dost" )
+                        starter="$starter_dos"
+                        app_ext=".com"
+                        ;;
+
+                    "dosx" | "dosp" )
+                        starter="$starter_dos"
+                        app_ext=".exe"
+                        ;;
+
+                    "dos" | "exe" | "small" | "compact" | "medium" | "large" | "huge" | "causeway" | "doss" | "dosh" | "dosu")
+                        starter="$starter_dos"
+                        app_ext=".exe"
+                        ;;
+
+                    "*" )
+
+# naming of the tcc cross compiler is broken
+                        if [ "$triplet_arch"  = "arm64" ]
+                        then
+                            triplet_arch="aarch64"
+                        fi
+
+
+                        if [ "$file_id" = "ELF" -a -n "$triplet_arch" ]
+                        then
+                            starter="$starter_qemu""$triplet_arch""$starter_static"
+
+                            if [ "$triplet_arch"  = "i686" ]
+                            then
+                                starter=""
+                            fi
+
+                            if [ "$triplet_arch"  = "x86_64" ]
+                            then
+                                starter=""
+                            fi
+
+                            if [ "$triplet_os" = "musl" ]
+                            then
+                                starter=""
+                            fi
+                            echo "# qemu starter: $starter"
+                        fi
+                    esac
+                fi
+
+                if [ -n "$app_ext" ]
+                then
+                    if [ -e "$app" -a  ! -e "$app"$app_ext   ]
+                    then
+                        ln 2>/dev/null  -s "$app"  "$app"$app_ext
+                        chmod 2>/dev/null u+x "$app"
+                        chmod 2>/dev/null u+x "$app$app_ext"
+                    fi
+                fi
+
+                if [ -n "$starter" ]
+                then
+                    echo "# using starter: $starter $app$app_ext $2 $3 $4 $5 $6 $7 $8 $9"
+                fi
+
+                $opt_time $starter $app$app_ext   $2 $3 $4 $5 $6 $7 $8 $9
+
+            else
+                echo "# no options for $scriptname $toolchain"
+            fi
+            ;;
+
+
+        "zig" | "zigcc" | "zigc++" | "zigcxx" )
+            # a workaround for "zig" not working as C or C++ Compiler replacement with autotools
+            # ToDo: this entry should use zig as build system
+
+            if [ -n "$all_opts" ]
+            then
+
+                if [ -n "$debug_me" ]
+                then
+                    echo "# scriptname: $scriptname"
+                    echo "# toolchain:  $toolchain"
+                fi
+
+                if [ -n "$triplet" ]
+                then
+                   export CC="zig"
+                   export CFLAGS=" -target $triplet $CFLAGS "
+                else
+                   export CC="zig"
+                fi
+
+                echo "compiling with $CC" $toolchain $CFLAGS $opt_m $opts_part   $srcdir/$all_opts
+                $opt_time  $CC $toolchain $CFLAGS $opt_m $opts_part   $srcdir/$all_opts  2>&1  | tee _bin.txt
+
+            else
+                echo "no options for $scriptname $toolchain"
+            fi
+            ;;
+
+
+        *)
+            echo "# calling for $build_mode"
+            if [ ! -e Makefile ]
+            then
+
+                if [ -e  $srcdir/Makefile ]
+                then
+                    ln -s  $srcdir/Makefile  Makefile
+                fi
+            fi
+
+            CC=$toolchain  CFLAGS="$CFLAGS $opt_m $opts_part" time  $build_mode  $all_opts   2>&1 | tee _log_$build_mode".txt"
+            ;;
+
+        esac
+
+
+        if [ "$scriptname" != "link"  -a "$scriptname" != "run"  -a "$scriptname" != "runstatic" -a "$scriptname" != "runsystem" ]
+        then
+            ls -Al | grep -v "^.d" | grep -v ".c" | grep -v ".h" | \
+                     grep -v ".cc" | grep -v ".cpp" | grep -v ".cxx" | grep -v ".hpp" | grep -v ".hxx" | \
+                     grep -v "lastbuild.h" | grep -v "stamp-h*" | grep -v "Makefile" | \
+                     grep -v "_bin.txt" | grep -v "_build.txt"  | grep -v "_make.txt" \
+
+        fi
+
+        cd "$old_cd"
+    fi
+
+done
+
+
+echo "# ########## All done"
+
+export MAKE="SOLD_MAKE"
+export CC="SOLD_CC"
+export CXX="$OLD_CXX"
+export CFLAGS="SOLD_CFLAGS"
+export CXXFLAGS="$OLD_CXXFLAGS"
+
+cd "$old_cd"
