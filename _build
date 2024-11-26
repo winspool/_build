@@ -261,7 +261,7 @@ do
     toolchain="`echo "$this_entry"  | cut -d "." -f2 `"
     opts_part="`echo "$this_entry"  | cut -d "." -f3- | tr "." " " `"
 
-    if [ -n "x$debug_me" ]
+    if [ -n "$debug_me" ]
     then
         echo "## first_part: $first_part"
         echo "## toolchain:  $toolchain"
@@ -440,14 +440,13 @@ do
             echo "# upps, toolchain is empty"
         fi
 
-
         case "$scriptname" in
         "bin" )
             # first arg is the file to compile
             if [ -n "$all_opts" -a -e "$srcdir/$1" ]
             then
-                echo  "# compiling with $toolchain" "$srcdir/"$all_opts
-                $opt_time "$toolchain" "$srcdir/"$all_opts  2>&1  | tee _bin.txt
+                echo  "# compiling with $toolchain" $opts_part $opt_m "$srcdir/"$all_opts
+                $opt_time "$toolchain" $opts_part $opt_m "$srcdir/"$all_opts  2>&1  | tee _bin.txt
             else
                 echo "# bad options for $toolchain"
             fi
@@ -468,7 +467,7 @@ do
             $opt_time $srcdir/configure  $host $all_opts   2>&1 | tee _configure.txt
 
             # echo "calling $MAKE:"
-            $opt_time  $MAKE  2>&1  |  tee _make.txt
+            $opt_time  $MAKE 2>&1  |  tee _make.txt
             ;;
 
 
@@ -505,7 +504,7 @@ do
             fi
 
             $opt_time  cmake -S "$srcdir"  $all_opts   2>&1 | tee _cmake.txt
-            $opt_time  $MAKE  2>&1 | tee _make.txt
+            $opt_time  $MAKE 2>&1 | tee _make.txt
             ;;
 
 
@@ -784,7 +783,7 @@ do
 
                 if [ -n "$starter" ]
                 then
-                    echo "# using starter: $starter $app$app_ext $2 $3 $4 $5 $6 $7 $8 $9"
+                    echo "# using starter: $starter $app$app_ext" $2 $3 $4 $5 $6 $7 $8 $9
                 fi
 
                 $opt_time $starter $app$app_ext   $2 $3 $4 $5 $6 $7 $8 $9
